@@ -1,0 +1,786 @@
+---
+title: 'ADA_Project: Trauma and Probable Depression'
+author: "Stephen Onteri"
+date: "2025-11-27"
+output: html_document
+---
+
+# Installing Haven Package
+```{r}
+#Install the package 
+
+install.packages("haven")
+
+```
+
+# DATASET IMPORTING
+
+## 1. Loading Trauma and Probable Depression Dataset
+
+```{r}
+
+library(haven)
+
+data <- read_sav("C:/Users/steve/OneDrive/Desktop/DataSet_ADA/Student data kakamega_final dataset - Copy (1).sav")
+
+```
+
+# DATA MANAGEMENT
+
+## 1. Determining the number of observations or number of people who filled out the survey and the number of variables in the dataframe.
+
+```{r}
+# Determining number of observations and variables in Student data Kakamega_final dataset
+dim(data)
+```
+## 2. Renaming the variables of interest to something shorter that easly describes what the variable is about:
+
+### 2.1 We will use the tidyverse package (dplyr). Install tidyverse
+
+```{r}
+# Installing tidyverse package
+
+install.packages("tidyverse")
+
+library(dplyr)
+```
+
+
+```{r}
+# Renaming variables of interest
+
+df_analysis <- data %>% 
+  dplyr::rename(
+    # Sociodemographic Confounders
+    age_years = Age,
+    gender = Gender,
+    class_level = Class,
+    school_type = School_Type,
+    attendance_type = Attendance_Type,
+    living_status = Living_Status,
+    
+    # Psychosocial & Family Confounders
+    fam_structure = Family_Structure,
+    fam_conflict = Conflict_Home,
+    bullying_yes = Bullied,
+    
+    # Support & Protective Factor Confounders
+    trusted_adult = Trusted_Adult,
+    counseling_avail = Availability_Guidance,
+    counseling_access = Accessed_Guidance
+  )
+
+# Checking the first few rows and column names to ensure renaming was succesful
+
+head(df_analysis)
+
+```
+
+### 2.2 Recoding the variables/Ensuring they are well coded (eaxample male and female to 0/1)
+
+```{r}
+# Checking the current coding
+library(haven)
+library(dplyr)
+
+# Checking the values and labels for Gender
+df_analysis %>% 
+  group_by(gender) %>% 
+  summarise(n = n()) %>% 
+  print()
+
+# Checking the values and labels for Family Conflict
+df_analysis %>% 
+  group_by(fam_conflict) %>% 
+  summarise(n = n()) %>% 
+  print()
+```
+
+#### 2.2.1 Recoding variable to transform 2 -> 0 
+
+```{r}
+library(dplyr)
+library(haven)
+
+binary_vars <- c("fam_conflict", "bullying_yes", "trusted_adult", 
+                 "counseling_avail", "counseling_access")
+
+df_analysis <- df_analysis %>%
+  # 1. Converting haven_labelled columns to standard numeric (1, 2, 3...)
+  #    Using base R's 'as.numeric' ensures compatibility.
+  mutate(across(all_of(binary_vars), as.numeric)) %>% 
+  
+  # 2. Recode 2 (No) to 0, keeping 1 (Yes) as 1
+  mutate(across(all_of(binary_vars), ~ case_when(
+    . == 1 ~ 1,  # Keep Yes (1) as 1
+    . == 2 ~ 0,  # Recode No (2) to 0 (Reference)
+    TRUE ~ .    # Keep missing/other codes as they are
+  )))
+```
+
+### 2.3 Setting the reference levels which is required for model interpretation 
+
+#### 2.3.1 Converting Categorical Variables to Factors to ensures all columns in the categorical_vars list become factor variables.
+
+```{r}
+library(dplyr)
+library(haven) 
+
+categorical_vars <- c("gender", "school_type", "fam_structure", 
+                      "class_level", "attendance_type", "living_status")
+
+# Convert to Factors
+
+df_analysis <- df_analysis %>%
+  mutate(across(all_of(categorical_vars), as_factor)) 
+
+# Confirming the changes to factor worked
+
+print(class(df_analysis$school_type)) 
+
+```
+#### 2.3.2 Setting reference levels
+
+```{r}
+library(dplyr)
+library(haven) 
+
+# Setting Reference Levels/goups 
+df_analysis <- df_analysis %>%
+  mutate(
+    # Reference: Male
+    gender = relevel(gender, ref = "Male"),
+    
+    # Reference: Mixed School (Capital 'S' confirmed)
+    school_type = relevel(school_type, ref = "Mixed School"), 
+    
+    # Reference: Form One
+    class_level = relevel(class_level, ref = "Form One"),
+    
+    # Reference: Day
+    attendance_type = relevel(attendance_type, ref = "Day"),
+    
+    # Reference: With parents
+    living_status = relevel(living_status, ref = "With parents"),
+
+    # Reference: Nuclear family 
+    fam_structure = relevel(fam_structure, ref = "Nuclear family 2 parent home raised by both parents(here includes both parents)") 
+  )
+
+# Confirming the final structure of the data frame
+
+str(df_analysis)
+```
+## Composite Scores calculation
+### Trauma variables calculation into trauma_score (Exposure)
+
+```{r}
+library(dplyr)
+library(haven)
+
+# The 16 SEG questions required for calculating the score
+trauma_items <- c(
+  "SEG_Strong_Feeling", "SEG_Trying_Notto_Think", "SEG_Staying_Away", 
+  "SEG_Not_Remember", "SEG_Negative_Thoughts", "SEG_Blaming_Self", 
+  "SEG_Bed_Feeling", "SEG_Not_Wanting", "SEG_Not_Close_To_People", 
+  "SEG_No_Happy_Feeling", "SEG_Feeling_Mad", "SEG_Doing_Unsafe", 
+  "SEG_Overly_Careful", "SEG_Being_Jumpy", "SEG_Problem_Attention", 
+  "SEG_Trouble_Sleep"
+)
+
+# Creating the  the trauma_score
+df_analysis <- df_analysis %>%
+  
+  # Converting all trauma items to numeric scores (stripping haven labels)
+  mutate(across(all_of(trauma_items), as.numeric, .names = "num_{.col}")) %>%
+    # Calculating the sum of the scores. 
+  
+  # Note: na.rm=TRUE calculates the score based on available items if some are missing.
+  rowwise() %>%
+  mutate(
+    trauma_score = sum(c_across(starts_with("num_SEG_")), na.rm = TRUE)
+  ) %>%
+  ungroup() %>%
+  
+  # Select only the new trauma_score and the original columns for the next step
+  select(-starts_with("num_SEG_"))
+```
+
+### Trauma score confirmation and summary statistics
+```{r}
+# Checking the range and summary statistics of the new trauma score
+summary(df_analysis$trauma_score)
+```
+### Calculating Depression Score (Outcome) using the PHQ-9 items
+
+```{r}
+# Print all column names in your data frame
+print(names(df_analysis))
+```
+
+#### Defining the PHQ-9 item names
+```{r}
+library(dplyr)
+library(haven) 
+
+# Defining the PHQ-9 items
+PHQ_items <- c(
+  "Feeling_Down_PHQ_9_1", "Little_Intrest_PHQ_9_2", "Trouble_Asleep_PHQ_9_3", 
+  "Poor_Appetite_PHQ_9_4", "Feeling_Tired_PHQ_9_5", "Bad_About_Self_PHQ_9_6", 
+  "Trouble_Concentrating_PHQ_9_7", "Slowly_Moving_PHQ_9_8", "Better_Dead_Thoughts_PHQ_9_9"
+)
+```
+
+#### Calculating Depression Score
+```{r}
+# Calculating the Composite Depression Score and Binary Outcome
+df_analysis <- df_analysis %>%
+  # Converting all PHQ items to numeric scores (0, 1, 2, or 3)
+  mutate(across(all_of(PHQ_items), as.numeric, .names = "num_{.col}")) %>%
+  
+  # Calculating the sum of the 9 items. 
+  #    na.rm=FALSE means the score is NA if any item is missing (conservative approach).
+  rowwise() %>%
+  mutate(
+    depression_score = sum(c_across(starts_with("num_")), na.rm = FALSE) 
+  ) %>%
+  ungroup() %>%
+  # Create the binary outcome variable (Clinical Depression: Score >= 10 is the threshold)
+  mutate(
+    depression_clinical_yes = case_when(
+      depression_score >= 10 ~ 1,
+      depression_score < 10  ~ 0,
+      TRUE ~ NA_real_ # Keep NA if the score itself is NA
+    )
+  ) %>%
+  # Converting the binary outcome to a factor (0="No", 1="Yes")
+  mutate(depression_clinical_yes = factor(depression_clinical_yes, 
+                                          levels = c(0, 1), 
+                                          labels = c("No", "Yes"))) %>%
+  
+  # Drop the temporary numeric columns created for summation
+  select(-starts_with("num_"))
+```
+
+#### Checking and confirming depression score exists and summary statistics
+```{r}
+# Checking the final output and distribution
+cat("--- Depression Score Summary ---\n")
+summary(df_analysis$depression_score)
+
+cat("\n--- Clinical Depression Distribution (Threshold >= 10) ---\n")
+df_analysis %>% 
+  group_by(depression_clinical_yes) %>% 
+  summarise(N = n())
+```
+
+#### Changing depression_clinical_yes to Probable depression
+
+```{r}
+library(dplyr)
+
+# Renaming the existing variable to reflect 'Probable Depression'
+df_analysis <- df_analysis %>%
+  dplyr::rename(
+    depression_probable_yes = depression_clinical_yes
+  )
+```
+
+#### Confirming the change worked and also determining the distribution
+
+```{r}
+# Confirming t he new name and distribution
+cat("--- New Outcome Distribution ---\n")
+df_analysis %>% 
+  group_by(depression_probable_yes) %>% 
+  summarise(N = n())
+```
+
+## Checking for missing data in variables of interest
+
+### Variable of interest 
+
+```{r}
+library(dplyr)
+library(haven) 
+
+# All critical variables of interest for model
+critical_vars <- c(
+  "depression_probable_yes", # Outcome (Binary Factor)
+  "trauma_score",            # Exposure (Continuous Score)
+  "age_years",               # Confounder (Continuous Numeric)
+  "gender",                  # Confounder (Factor)
+  "school_type",             # Confounder (Factor)
+  "class_level",             # Confounder (Factor)
+  "living_status",           # Confounder (Factor)
+  "attendance_type"          # Confounder (Factor)
+)
+```
+
+
+### Looking for missing counts for all critical variables by including NA counts to assess data completeness.
+
+```{r}
+sapply(df_analysis[critical_vars], function(x) table(x, useNA = "always"))
+
+# Checking the age variable (countinuous) for specific non-numeric or out-of-range values.
+# Checking for the class and summary to look for max/min values and NA count
+
+cat("\n--- Summary of age_years variable ---\n")
+summary(df_analysis$age_years)
+
+ df_analysis <- df_analysis %>%
+   mutate(age_years = case_when(
+     age_years == "20 years" ~ 20,
+     is.na(age_years) ~ NA_real_,
+   TRUE ~ as.numeric(age_years) 
+   ))
+```
+# From the missingness determination, we only have 13 cases in the outcome variable (Depression_score) with missing values which is about 1.3%. Complete case analysis will be will be used. We will filter the 13 cases out and remain with only complete cases (1020-13= 1007)
+
+#### Complete Case Analysis (Removing missing cases)
+```{r}
+library(dplyr)
+library(haven) 
+
+# Filtering out the 13 rows where the outcome variable (probable depression) 
+
+df_analysis_complete <- df_analysis %>%
+  filter(!is.na(depression_probable_yes))
+```
+
+#### Confirming the number of cases after filtering 13 cases
+```{r}
+# Confirming the number of rows is 1007 (1020 - 13)
+print(dim(df_analysis_complete))
+```
+## Descriptive Statistics
+
+### Calculating Mean, Standard Deviation (SD), Min, and Max for the continuous variables 1.Trauma_score (Exposure) and age_years (confounder).
+
+```{r}
+# Mean, Standard Deviation (SD), Min, and Max for trauma score and age_years 
+
+continuous_summary <- df_analysis_complete %>%
+  summarise(
+    N_total = n(),
+    
+    # Trauma Score
+    Trauma_N = sum(!is.na(trauma_score)),
+    Trauma_Mean = mean(trauma_score, na.rm = TRUE),
+    Trauma_SD = sd(trauma_score, na.rm = TRUE),
+    Trauma_Min = min(trauma_score, na.rm = TRUE),
+    Trauma_Max = max(trauma_score, na.rm = TRUE),
+    
+    # Age (Years)
+    Age_N = sum(!is.na(age_years)),
+    Age_Mean = mean(age_years, na.rm = TRUE),
+    Age_SD = sd(age_years, na.rm = TRUE),
+    Age_Min = min(age_years, na.rm = TRUE),
+    Age_Max = max(age_years, na.rm = TRUE)
+  )
+
+cat("--- Summary Statistics for Continuous Variables (Mean (SD), Min-Max) ---\n")
+print(continuous_summary)
+```
+
+### Frequencies (N) and percentages for categorical variables 1. Probable depression_yes (outcome) and other Categorical Variables (confounders)
+
+```{r}
+# Calculating frequency (N) and percentage (%) for the outcome and all categorical confounders.
+
+categorical_vars <- c("depression_probable_yes", "gender", "school_type", 
+                      "class_level", "living_status", "attendance_type", 
+                      "fam_structure")
+
+# Create a list of frequency tables
+freq_tables_list <- lapply(df_analysis_complete[categorical_vars], function(col) {
+  table_data <- data.frame(table(col, useNA = "no"))
+  colnames(table_data) <- c("Category", "N")
+  table_data$Percent <- round((table_data$N / sum(table_data$N)) * 100, 1)
+  return(table_data) 
+})
+```
+
+### Descriptive table generation
+
+```{r}
+# Naming the list of elements
+names(freq_tables_list) <- categorical_vars
+
+# Combining all frequency tables into one data frame
+categorical_summary <- bind_rows(freq_tables_list, .id = "Variable_Name")
+
+cat("\n--- Frequency Distribution for Categorical Variables (N, %) ---\n")
+print(categorical_summary)
+```
+
+### Creating a box plot to visually compare the distribution of trauma Score (exposure) to Probable Depression outcome.
+
+```{r}
+library(ggplot2)
+
+# Descriptive trauma Score (continuous exposure) across the Probable Depression outcome (binary) using box plot
+
+ggplot(df_analysis_complete, aes(x = depression_probable_yes, y = trauma_score, fill = depression_probable_yes)) +
+  geom_boxplot() +
+  geom_jitter(color = "black", size = 0.4, alpha = 0.6) + # Add points for density
+  scale_fill_manual(values = c("No" = "#1f77b4", "Yes" = "#d62728")) + # Custom colors
+  labs(
+    title = "Distribution of Trauma Score by Probable Depression Status",
+    x = "Probable Depression (PHQ-9 $\\ge 10$)",
+    y = "Trauma Score (Sum of 16 SEG Items)",
+    fill = "Probable Depression"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+# Save the plot
+ggsave("trauma_vs_depression_boxplot.png", width = 7, height = 5)
+```
+## Logistic Regression Model
+
+### Binary logistic was the model choosen because the outcome variable (Probable_depression_yes) is a categorical varial with two outcome (Yes/No) and they are not ordered.
+
+```{r}
+# Running a binary logistic regression model to estimate the association between Trauma Score and Probable Depression,while adjusting for confounders.
+
+model_formula <- depression_probable_yes ~ trauma_score + 
+                 age_years + gender + school_type + class_level + 
+                 living_status + attendance_type + fam_structure
+
+
+logistic_model <- glm(model_formula, 
+                      data = df_analysis_complete, 
+                    family = "binomial")
+
+```
+
+### Model Summary
+```{r}
+# Reviewing Binary Logistic Regression Output
+
+cat("\n--- Full Model Summary (Coefficients) ---\n")
+summary(logistic_model)
+```
+### Adjusted Odds Ratios (AOR) and 95% Confidence Interval (CI)
+
+```{r}
+# Calculating and displaying the Adjusted Odds Ratios (AOR) and 95% Confidence Intervals (CI) for all model parameters.
+
+cat("\n--- Adjusted Odds Ratios and 95% Confidence Intervals ---\n")
+exp(cbind(AOR = coef(logistic_model), confint(logistic_model)))
+```
+
+## Assessing Cause of Seperation
+
+### Running the model, a warning indicating separation (quasi-separation) was observed. To mitigate, I performed a model diagnostics by systematically cross-tabulating the binary outcome variable with all categorical predictor variables to identify any contingency table cells with a frequency count of zero. This step is critical because the presence of zero cells causes model separation, leading to non-convergence and unreliable Odds Ratios in the standard logistic regression.
+
+### Checking cross-tabulations of the outcome (depression_probable_yes) against all categorical factors to identify zero cells, which cause model separation.
+
+```{r}
+library(dplyr)
+library(haven)
+
+# Checking cross-tabulations of the outcome (depression_probable_yes) against all categorical factors.
+
+cat("--- Cross-Tabulation Check (Looking for ZEROs) ---\n")
+
+# Gender
+cat("\nGender:\n")
+print(table(df_analysis_complete$gender, df_analysis_complete$depression_probable_yes))
+
+# School Type
+cat("\nSchool Type:\n")
+print(table(df_analysis_complete$school_type, df_analysis_complete$depression_probable_yes))
+
+# Class Level
+cat("\nClass Level:\n")
+print(table(df_analysis_complete$class_level, df_analysis_complete$depression_probable_yes))
+
+# Living Status
+cat("\nLiving Status:\n")
+print(table(df_analysis_complete$living_status, df_analysis_complete$depression_probable_yes))
+
+# Attendance Type
+cat("\nAttendance Type:\n")
+print(table(df_analysis_complete$attendance_type, df_analysis_complete$depression_probable_yes))
+
+# Family Structure
+cat("\nFamily Structure:\n")
+print(table(df_analysis_complete$fam_structure, df_analysis_complete$depression_probable_yes))
+```
+
+### Recording Living Status by collapsing categories to try and eliminate separation
+ 
+```{r}
+library(dplyr)
+library(car)
+library(stringr)
+
+# Collapsing rare categories in living_status that caused model separation into a new, single category called "Other/Non-Standard".
+
+df_analysis_complete <- df_analysis_complete %>%
+  mutate(
+    living_status_recode = case_when(
+      # Keep main categories as is
+      living_status == "With parents" ~ "With parents",
+      living_status == "Relatives" ~ "Relatives",
+      living_status == "In school" ~ "In school",
+      # Collapsing all rare and problematic codes into "Other/Non-Standard"
+      TRUE ~ "Other/Non-Standard"
+    )
+  ) %>%
+  # Converting to a factor and set "With parents" as the reference level
+  mutate(
+    living_status_recode = factor(
+      living_status_recode,
+      levels = c("With parents", "Relatives", "In school", "Other/Non-Standard")
+    )
+  )
+
+```
+
+
+#### Confirming Non-Zero Cases
+
+```{r}
+library(dplyr)
+library(car)
+library(stringr)
+
+# Verifying that the new cross-tabulation has no zero cells
+cat("\n--- Verification: New Living Status Cross-Tabulation ---\n")
+print(table(df_analysis_complete$living_status_recode, df_analysis_complete$depression_probable_yes))
+
+```
+
+#### Re-Run Model Fit and Assumption
+
+```{r}
+# Model fit and assumption checking after recoding 'living_status' to 'living_status_recode'
+
+model_formula_recode <- depression_probable_yes ~ trauma_score + 
+                        age_years + gender + school_type + class_level + 
+                        living_status_recode + attendance_type + fam_structure
+
+logistic_model <- glm(model_formula_recode, 
+                      data = df_analysis_complete, 
+                      family = "binomial")
+
+cat("\n--- Model Fit Complete (Using Recoded Living Status) ---\n")
+
+# Multicollinearity Check: VIF
+cat("\n--- Multicollinearity Check: Variance Inflation Factor (VIF) ---\n")
+vif_results <- vif(logistic_model)
+print(vif_results)
+
+# Linearity of Logit Check (Quadratic Terms Test)
+logistic_model_quad <- glm(
+    depression_probable_yes ~ trauma_score + I(trauma_score^2) + 
+                              age_years + I(age_years^2) + 
+                              gender + school_type + class_level + 
+                              living_status_recode + attendance_type + fam_structure,
+    data = df_analysis_complete, 
+    family = "binomial"
+)
+
+cat("\n--- Linearity of Logit Check (Quadratic Terms Test) ---\n")
+anova_results <- anova(logistic_model, logistic_model_quad, test = "Chisq")
+print(anova_results)
+```
+
+### Adjusted Odds Ratio Calculation and Confidence interval after correcting for separation issue
+
+```{r}
+# Extracting and displaying the Adjusted Odds Ratios (AOR) and 95% Confidence Intervals (CI)
+
+cat("\n--- FINAL ADJUSTED ODDS RATIOS (AOR) and 95% Confidence Intervals ---\n")
+exp(cbind(AOR = coef(logistic_model), confint(logistic_model)))
+```
+
+
+#### Detailed Summary Model
+
+```{r}
+# summary model
+cat("\n--- Detailed Summary of Final Model (Coefficients and P-values) ---\n")
+summary(logistic_model)
+```
+
+### Summary with P-value
+
+```{r}
+summary(logistic_model)
+```
+# Secondary Objective (To examine whether the association between trauma exposure and depression differs by key sociodemographic factors)
+
+## Interaction Model Set-up
+
+```{r}
+# Interaction model including the main effect plus the three interaction terms (gender, school type and living status).
+
+model_formula_interaction <- depression_probable_yes ~ trauma_score * (gender + school_type + living_status_recode) + 
+                             age_years + class_level + attendance_type + fam_structure
+
+logistic_model_interaction <- glm(model_formula_interaction, 
+                                  data = df_analysis_complete, 
+                                  family = "binomial")
+
+```
+
+
+### Comparing Models using the Likelihood Ratio Test
+
+```{r}
+
+# Checking if adding the interaction terms significantly improves the model's predictive power.
+
+cat("\n--- Likelihood Ratio Test for Interaction Terms ---\n")
+anova_results_interaction <- anova(logistic_model, logistic_model_interaction, test = "Chisq")
+print(anova_results_interaction)
+
+```
+
+### Summary
+
+```{r}
+# summary interaction coefficient
+cat("\n--- Interaction Model Coefficients (Raw Estimates) ---\n")
+summary(logistic_model_interaction)
+```
+
+## Model Robustness Check: Influential Observations (Cook's D)
+
+```{r}
+plot(logistic_model_interaction, which=4, id.n=5, col="red")
+```
+
+### Cooks Distance calculations
+```{r}
+# Calculating Cook's Distance for all observations
+cooks_d <- cooks.distance(logistic_model_interaction)
+
+# Find the maximum Cook's D value
+max_cooks_d <- max(cooks_d, na.rm = TRUE)
+print(paste("Maximum Cook's Distance:", max_cooks_d))
+
+# Find the indices of the top 3 most influential observations
+top_3_influential <- head(sort(cooks_d, decreasing = TRUE), 3)
+print("Top 3 Influential Observations:")
+print(top_3_influential)
+```
+
+
+
+
+
+## Linearity Assumption Check using the quadratic term
+
+```{r}
+# Testing linearity for trauma_score and age_years by adding quadratic terms
+model_linearity_check <- glm(
+    depression_probable_yes ~ trauma_score + I(trauma_score^2) + 
+                              age_years + I(age_years^2) + 
+                              gender + school_type + living_status_recode + 
+                              class_level + attendance_type + fam_structure, 
+    data = df_analysis_complete, 
+    family = "binomial"
+)
+
+# Examine the p-values for the quadratic terms
+summary(model_linearity_check)
+```
+
+## Forest Plot (Adjusted Odds Ratios)
+
+```{r}
+# Loading ggplot2 and dplyr)
+
+library(ggplot2)
+library(dplyr)
+
+# Creating Data Frame from Results
+results_data <- data.frame(
+  Variable = c(
+    'Trauma Score (per unit)', 'Age (per year)', 'Gender: Female',
+    'School: Boys Only', 'School: Girls Only',
+    'Class: Form Two', 'Class: Form Three', 'Class: Form Four',
+    'Living: Relatives', 'Living: In School',
+    'Living: Other/Non-Standard', 'Attendance: Boarding',
+    'Family: Single Parent', 'Family: Extended',
+    'Family: Two Parent Home*', 'Family: Other'
+  ),
+  AOR = c(
+    1.173, 1.213, 1.158, 1.238, 1.128, 1.084, 1.409, 0.967, 1.128, 0.414, 0.816, 1.363,
+    1.695, 1.341, 0.840, 1.173
+  ),
+  Lower_CI = c(
+    1.143, 1.001, 0.720, 0.583, 0.627, 0.579, 0.742, 0.447, 0.540, 0.110, 0.342, 0.707,
+    0.970, 0.612, 0.346, 0.343
+  ),
+  Upper_CI = c(
+    1.207, 1.475, 1.873, 2.567, 1.996, 2.038, 2.709, 2.102, 2.354, 1.346, 1.836, 2.573,
+    2.920, 2.896, 1.962, 3.643
+  )
+)
+
+# Determining Significance and assigning Color (find is significant if the 95% CI does NOT cross 1.0).
+results_data <- results_data %>%
+  mutate(
+    Significance = case_when(
+      Lower_CI > 1.0 ~ "Significant Increase",  # Lower bound > 1.0
+      Upper_CI < 1.0 ~ "Significant Decrease",  # Upper bound < 1.0
+      Lower_CI <= 1.0 & Upper_CI >= 1.0 ~ "Not Significant",
+      TRUE ~ "Not Significant" # Catch-all
+    ),
+    # Ordering variables for plotting (significant at top, for example)
+    Variable = factor(Variable, levels = Variable[order(AOR, decreasing = FALSE)])
+  )
+
+# Generating Color-Coded Forest Plot
+forest_plot_colored <- ggplot(
+  results_data, 
+  aes(y = Variable, x = AOR, xmin = Lower_CI, xmax = Upper_CI, color = Significance)
+) +
+  
+  # Adding the reference line at AOR = 1.0
+  geom_vline(xintercept = 1.0, linetype = "dashed", color = "red", linewidth = 0.5) +
+  
+  # Plotting the confidence intervals (color is inherited from 'Significance')
+  geom_errorbarh(height = 0.1, linewidth = 1.0) +
+  
+  # Plotting the AOR points
+  geom_point(size = 3.5, shape = 18) +
+  
+  # Defining colors explicitly
+  scale_color_manual(
+    values = c(
+      "Significant Increase" = "orange", 
+      "Significant Decrease" = "blue", 
+      "Not Significant" = "grey5"
+    )
+  ) +
+  
+  # Using log scale for the X-axis
+  scale_x_log10(limits = c(0.3, 5.0), breaks = c(0.4, 0.6, 1.0, 1.5, 2.5, 4.0)) +
+  
+  labs(
+       x = "Adjusted Odds Ratio (AOR) [Log Scale]",
+    y = ""
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(hjust = 0, size = 10),
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+  )
+
+# Print the plot
+print(forest_plot_colored)
+# ggsave("forest_plot_colored.png", width = 8, height = 10)
+```
+
+
+
